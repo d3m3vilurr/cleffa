@@ -1,0 +1,4 @@
+slackclient
+pyyaml
+requests
+python-gitlab

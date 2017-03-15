@@ -1,0 +1,8 @@
+SLACK:
+    TOKEN: SLACK_BOT_RTM_TOKEN
+    NAME: botname
+
+GITLAB:
+    URL: http://git.lab.addr
+    TOKEN: GITLAB_WEB_TOKEN
+
