@@ -3,6 +3,6 @@ SLACK:
     NAME: botname
 
 GITLAB:
-    URL: http://git.lab.addr
+    HOST: http://git.lab.addr
     TOKEN: GITLAB_WEB_TOKEN
 
