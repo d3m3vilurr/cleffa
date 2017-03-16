@@ -50,7 +50,8 @@ class SlackChannel(object):
             for user in users.get('members'):
                 if 'name' in user and user.get('name') == self.nickname:
                     self.userid = user.get('id')
-        self.call_signs = [self.nickname, '<@' + user.get('id') + '>']
+                    break
+        self.call_signs = [self.nickname, '<@' + self.userid + '>']
         #print self.call_signs
 
     def mainloop(self):
