@@ -1,9 +1,12 @@
+# -*- coding: utf-8 -*-
 import re
 import time
 from slackclient import SlackClient
 import requests
 import gitlab
 import traceback
+
+BULLET = u'\u2022'
 
 
 class GitRepo(object):
@@ -24,7 +27,7 @@ class GitlabRepo(GitRepo):
         commit = self.project.commits.get(ref)
         return dict(sha=commit.id,
                     message=commit.message,
-                    author='%s <%s>' % (commit.author_name, commit.author_email))
+                    author=u'%s <%s>' % (commit.author_name, commit.author_email))
 
     def update_tag(self, name, ref):
         try:
@@ -47,7 +50,7 @@ class SlackChannel(object):
     def bind_bot_info(self):
         users = self.client.api_call('users.list')
         if not users.get('ok'):
-            self.userid = 'unknwon'
+            self.userid = 'unknown'
         else:
             for user in users.get('members'):
                 if 'name' in user and user.get('name') == self.nickname:
@@ -62,16 +65,16 @@ class SlackChannel(object):
             return False
         self.bind_bot_info()
         while True:
-            for chan, sender, payload in self.parse_data(self.client.rtm_read()):
+            for chan, sender, payload, raw in self.parse_data(self.client.rtm_read()):
                 if not chan or not payload:
                     continue
                 try:
-                    self.do_handles(chan, sender, *payload)
+                    self.do_handles(chan, sender, payload, raw)
                 except:
                     slack.send(chan, sender,
                                'something got error. please contact maintainer')
                     traceback.print_exc()
-            time.sleep(0.5)
+            time.sleep(0.1)
 
     def parse_data(self, datas):
         if not datas or not len(datas):
@@ -98,53 +101,77 @@ class SlackChannel(object):
                                  data['text'].split(' ')))
             if payload[0] not in self.call_signs:
                 continue
-            yield data['channel'], data['user'], payload[1:]
+            yield data['channel'], data['user'], payload[1:], data
 
-    def do_handles(self, chan, sender, *payload):
+    def do_handles(self, chan, sender, payload, raw):
         for handle in self.handles:
-            handle(self, chan, sender, payload)
+            handle(self, chan, sender, payload, raw)
 
     def add_handle(self, handle):
         self.handles.append(handle)
 
+    def find_handle(self, name):
+        for handle in self.handles:
+            if name == handle.name:
+                return handle
+
     def send(self, channel, sender, message):
         slack.client.rtm_send_message(channel=channel,
-                                      message='<@%s> %s' % (sender, message))
+                                      message=u'<@%s> %s' % (sender, message))
 
 
 class Command(object):
-    def __init__(self, name, length=1):
+    def __init__(self, name, length=1, over=False):
         self.name = name
         self.arg_length = length
+        self.allow_length_over = over
+        self.arg_info = ''
+        self.description = ''
 
-    def __call__(self, slack, chan, sender, payload):
+    def __call__(self, slack, chan, sender, payload, raw):
         pass
 
     def valid_payload(self, payload):
-        if len(payload) != self.arg_length:
-            return False
+        if not self.allow_length_over:
+            if len(payload) != self.arg_length:
+                return False
+        else:
+            if len(payload) < self.arg_length:
+                return False
         if payload[0] != self.name:
             return False
         return True
+
+    def detail_help_messages(self, nick):
+        return u'\nUsing: {nick} {name} {args}\n\n{desc}' \
+                .format(nick=nick, name=self.name, args=self.arg_info,
+                        desc=self.description) \
+                .rstrip()
 
 
 class PingCommand(Command):
     def __init__(self):
         # ping
         super(PingCommand, self).__init__('ping', 1)
+        self.description = 'Check bot alive'
 
-    def __call__(self, slack, chan, sender, payload):
+    def __call__(self, slack, chan, sender, payload, raw):
         if not self.valid_payload(payload):
             return
-        slack.send(chan, sender, 'pong')
+        append = ''
+        if raw.get('ts'):
+            delay = int((time.time() - float(raw['ts'])) * 1000)
+            append = ' ({delay}ms)'.format(delay=delay)
+        slack.send(chan, sender, 'pong' + append)
 
 
 class TagCommand(Command):
     def __init__(self):
-        # tag repo name ref
         super(TagCommand, self).__init__('tag', 4)
+        self.arg_info = '<repo> <tag_name> <ref>'
+        self.description = 'Create or update git repo tag'
 
-    def __call__(self, slack, chan, sender, payload):
+    def __call__(self, slack, chan, sender, payload, raw):
         if not self.valid_payload(payload):
             return
         try:
@@ -164,10 +191,12 @@ class TagCommand(Command):
 
 class CommitInfoCommand(Command):
     def __init__(self):
-        # ref repo ref
+        # commit repo ref
         super(CommitInfoCommand, self).__init__('commit', 3)
+        self.arg_info = '<repo> <ref>'
+        self.description = 'Return commit reference information.'
 
-    def __call__(self, slack, chan, sender, payload):
+    def __call__(self, slack, chan, sender, payload, raw):
         if not self.valid_payload(payload):
             return
         try:
@@ -181,8 +210,31 @@ class CommitInfoCommand(Command):
         except:
             slack.send(chan, sender, 'unknown ref')
             return
-        message = '\ncommit {sha}\nAuthor: {author}\n\n{message}'''.format(**info)
+        message = u'\ncommit {sha}\nAuthor: {author}\n\n{message}'.format(**info)
         slack.send(chan, sender, message)
+
+
+class HelpCommand(Command):
+    def __init__(self):
+        # help <command>
+        super(HelpCommand, self).__init__('help', 1, over=True)
+        self.arg_info = '[command]'
+        self.description = '$ man man'
+
+    def __call__(self, slack, chan, sender, payload, raw):
+        if not self.valid_payload(payload):
+            return
+        if len(payload) > 1:
+            handle = slack.find_handle(payload[1])
+            if not handle:
+                return slack.sand(chan, sender, 'unknown command')
+            slack.send(chan, sender, handle.detail_help_messages(slack.nickname))
+        else:
+            names = sorted(handle.name for handle in slack.handles)
+
+            message = u'All command list\n\n{commands}' \
+                    .format(commands='\n'.join(BULLET + ' ' + n for n in names))
+            slack.send(chan, sender, message)
 
 
 if __name__ == '__main__':
@@ -195,5 +247,6 @@ if __name__ == '__main__':
     slack.add_handle(TagCommand())
     slack.add_handle(CommitInfoCommand())
     slack.add_handle(PingCommand())
+    slack.add_handle(HelpCommand())
 
     slack.mainloop()
