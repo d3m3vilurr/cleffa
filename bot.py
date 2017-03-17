@@ -38,6 +38,7 @@ class SlackChannel(object):
         self.client = SlackClient(token)
         self.nickname = nickname
         self.handles = []
+        self.uptime = time.time()
 
     def connect(self):
         return self.client.rtm_connect()
@@ -70,10 +71,21 @@ class SlackChannel(object):
         if not datas or not len(datas):
             raise StopIteration
         for data in datas:
-            if data.get('type') and data['type'] == 'hello':
+            if not data.get('type'):
+                continue
+            if data['type'] == 'hello':
                 print 'bot started'
                 continue
+            # only allow message data
+            if data['type'] != 'message':
+                continue
             if not data or not data.get('text') or not data.get('user'):
+                continue
+            # ignore own message
+            if data['user'] == self.userid:
+                continue
+            # ignore old request message
+            if data['ts'] and float(data['ts']) < self.uptime:
                 continue
             payload = filter(lambda x: x,
                              map(lambda x: x.strip(),
