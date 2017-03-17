@@ -3,6 +3,7 @@ import time
 from slackclient import SlackClient
 import requests
 import gitlab
+import traceback
 
 
 class GitRepo(object):
@@ -64,7 +65,12 @@ class SlackChannel(object):
             for chan, sender, payload in self.parse_data(self.client.rtm_read()):
                 if not chan or not payload:
                     continue
-                self.do_handles(chan, sender, *payload)
+                try:
+                    self.do_handles(chan, sender, *payload)
+                except:
+                    slack.send(chan, sender,
+                               'something got error. please contact maintainer')
+                    traceback.print_exc()
             time.sleep(0.5)
 
     def parse_data(self, datas):
