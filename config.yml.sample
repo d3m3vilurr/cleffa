@@ -6,3 +6,6 @@ GITLAB:
     HOST: http://git.lab.addr
     TOKEN: GITLAB_WEB_TOKEN
 
+DRONE:
+    HOST: http://drone.addr
+    TOKEN: DRONE_AUTH_TOKEN

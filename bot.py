@@ -1,12 +1,38 @@
 # -*- coding: utf-8 -*-
 import re
 import time
+import types
+import json
+import traceback
 from slackclient import SlackClient
 import requests
 import gitlab
-import traceback
 
 BULLET = u'\u2022'
+
+DRONE_BUILD_INFO_FORMAT = u'''
+Number: {number}
+Commit: {commit}
+Author: {author_email}
+Ref: {branch}
+Event: {event}
+
+{message}
+'''.rstrip()
+
+DRONE_BUILD_HELP_DESC = u'''
+Drone CI build helper
+
+Options:
+* `repo`: repo name eg;`sulee/cleffa`
+* `id`: target build number
+* `r`: request rebuild
+
+Options example:
+* `sulee/cleffa`
+* `sulee/cleffa 1`
+* `sulee/cleffa 1 r`
+'''.strip()
 
 
 class GitRepo(object):
@@ -35,6 +61,28 @@ class GitlabRepo(GitRepo):
         except gitlab.exceptions.GitlabDeleteError:
             pass
         self.project.tags.create(dict(tag_name=name, ref=ref))
+
+
+class Drone(object):
+    def __init__(self, host, token):
+        self.host = host
+        self.token = token
+        self.session = requests.session()
+        self.session.headers['Authorization'] = 'Bearer ' + self.token
+
+    def get(self, url):
+        full_url = self.host + url
+        try:
+            return json.loads(self.session.get(full_url).text)
+        except ValueError:
+            return dict(error='unknown error')
+
+    def post(self, url, data=None):
+        full_url = self.host + url
+        try:
+            return json.loads(self.session.post(full_url, data=data).text)
+        except ValueError:
+            return dict(error='unknown error')
 
 
 class SlackChannel(object):
@@ -143,7 +191,7 @@ class Command(object):
         return True
 
     def detail_help_messages(self, nick):
-        return u'\nUsing: {nick} {name} {args}\n\n{desc}' \
+        return u'\nUsing: `{nick} {name} {args}`\n\n{desc}' \
                 .format(nick=nick, name=self.name, args=self.arg_info,
                         desc=self.description) \
                 .rstrip()
@@ -210,7 +258,44 @@ class CommitInfoCommand(Command):
         except:
             slack.send(chan, sender, 'unknown ref')
             return
-        message = u'\ncommit {sha}\nAuthor: {author}\n\n{message}'.format(**info)
+        message = u'\nCommit: {sha}\nAuthor: {author}\n\n{message}'.format(**info)
+        slack.send(chan, sender, message)
+
+
+class BuildCommand(Command):
+    def __init__(self):
+        # commit repo ref
+        super(BuildCommand, self).__init__('build', 2, over=True)
+        self.arg_info = '<repo> [id [r]]'
+        self.description = DRONE_BUILD_HELP_DESC
+
+    def __call__(self, slack, chan, sender, payload, raw):
+        if not self.valid_payload(payload):
+            return
+        drone = Drone(config['DRONE']['HOST'], config['DRONE']['TOKEN'])
+        payload_len = len(payload)
+        build_info = DRONE_BUILD_INFO_FORMAT
+        if payload_len == 2:
+            data = drone.get('/api/repos/%s/builds' % payload[1])
+            if type(data) == types.DictType and data.get('error'):
+                message = data['error']
+            else:
+                message = u'Latest build\n' + build_info.format(**data[0])
+        elif payload_len == 3:
+            data = drone.get('/api/repos/%s/builds/%s' % tuple(payload[1:3]))
+            if type(data) == types.DictType and data.get('error'):
+                message = data['error']
+            else:
+                message = build_info.format(**data)
+        elif payload_len == 4:
+            if payload[3] == 'r':
+                data = drone.post('/api/repos/%s/builds/%s' % tuple(payload[1:3]))
+                if type(data) == types.DictType and data.get('error'):
+                    message = data['error']
+                else:
+                    message = u'Job enqueued\n' + build_info.format(**data)
+            else:
+                message = 'unknown subcommand'
         slack.send(chan, sender, message)
 
 
@@ -233,7 +318,7 @@ class HelpCommand(Command):
             names = sorted(handle.name for handle in slack.handles)
 
             message = u'All command list\n\n{commands}' \
-                    .format(commands='\n'.join(BULLET + ' ' + n for n in names))
+                    .format(commands='\n'.join(BULLET + ' `' + n + '`' for n in names))
             slack.send(chan, sender, message)
 
 
@@ -247,6 +332,7 @@ if __name__ == '__main__':
     slack.add_handle(TagCommand())
     slack.add_handle(CommitInfoCommand())
     slack.add_handle(PingCommand())
+    slack.add_handle(BuildCommand())
     slack.add_handle(HelpCommand())
 
     slack.mainloop()
