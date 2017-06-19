@@ -84,6 +84,13 @@ class Drone(object):
         except ValueError:
             return dict(error='unknown error')
 
+    def delete(self, url):
+        full_url = self.host + url
+        try:
+            return json.loads(self.session.delete(full_url).text)
+        except ValueError:
+            return dict(error='unknown error')
+
 
 class SlackChannel(object):
     def __init__(self, nickname, token):
@@ -289,7 +296,17 @@ class BuildCommand(Command):
                 message = build_info.format(**data)
         elif payload_len == 4:
             if payload[3] == 'r':
-                data = drone.post('/api/repos/%s/builds/%s' % tuple(payload[1:3]))
+                url = '/api/repos/%s/builds/%s' % tuple(payload[1:3])
+                data = drone.get(url)
+                if type(data) == types.DictType:
+                    # stop running build
+                    if data.get('status') == u'running':
+                        for job in data.get('jobs', []):
+                            if job.get('status') == u'running':
+                                data = drone.delete((url + '/%s') % job.get('number'))
+                        # FIXME
+                        time.sleep(5)
+                    data = drone.post('/api/repos/%s/builds/%s' % tuple(payload[1:3]))
                 if type(data) == types.DictType and data.get('error'):
                     message = data['error']
                 else:
